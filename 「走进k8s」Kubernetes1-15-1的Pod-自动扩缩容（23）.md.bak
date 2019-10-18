@@ -1,0 +1,351 @@
+> 上次说了deployment，它也是kubernetes的核心概念，主要职责和RC一样就是为了保证pod的数量和健康，除了RC有的功能，它自带的光环属性查看事件和状态，还支持回滚，回滚到任意的版本，相对于RC强大。官方推荐就是使用deployment来管理无状态的应用。所以还是按照官方的理论走以后就用deployment来管理我们的pod。前面说过可以通过--replicas的方式来扩缩容，或者是通过dashboard的方式界面化的扩缩容。其实都需要手动，如果kubernetes可以通过当时容器使用情况来自动的扩缩容，其实有的可以进行预知，有的根本就是不确定的，纯手工去做也是不现实的人海战术。
+
+![](https://upload-images.jianshu.io/upload_images/11223715-47c7bab60cbec510.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+#### （一）HPA
+
+![](https://upload-images.jianshu.io/upload_images/11223715-743205b588bd931a.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+* ① 历史
+
+> HPA最早版本（autoscaling/v1）仅支持CPU作为可监控的度量标准。当前版本HPA处于测试阶段（autoscaling/v2beta1）支持内存和其他自定义指标。
+
+
+* ②介绍
+
+> Horizontal Pod Autoscaling，简称HPA, Kubernetes通过HPA的设定，实现了容器的弹性伸缩功能。对于Kubernetes中的POD集群来说，HPA可以实现很多自动化功能，比如当POD中业务负载上升的时候，可以创建新的POD来保证业务系统稳定运行，当POD中业务负载下降的时候，可以销毁POD来减少资源的浪费。当前的弹性伸缩的指标包括：CPU，内存，并发数，包传输大小。HPA控制器默认每隔30秒就会运行一次，一旦创建的HPA，我们就可以通过命令查看获取到的当前指标信息。
+
+
+
+ > 原来是k8s下面单独的一个项目，现在已经独立在github上了
+
+
+
+* ③ 官网
+
+> [https://github.com/kubernetes-retired/heapster](https://github.com/kubernetes-retired/heapster) 
+> kubernetes 已经废弃了，我们还要顺势而为对吧。在说咱们是1.15.1 已经不在支持HPA，
+
+![](https://upload-images.jianshu.io/upload_images/11223715-9fc4660244c1f0e3.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+#### （二）Metrics-Server
+
+* ① 官网
+
+> [https://github.com/kubernetes-incubator/metrics-server](https://github.com/kubernetes-incubator/metrics-server)
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-8658c17d5fc6d68d.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+![](https://upload-images.jianshu.io/upload_images/11223715-4e61cb239d353eec.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+* ② 介绍
+
+> kubernetesv1.11以后不再支持通过heaspter采集监控数据，支持新的监控数据采集组件metrics-server，比heaspter轻量很多，也不做数据的持久化存储，提供实时的监控数据查询还是很好用的。
+
+
+* ③ 架构
+
+> metrics-server 通过 kube-apiserver 发现所有节点，然后调用 kubelet APIs（通过 https 接口）获得各节点（Node）和 Pod 的 CPU、Memory 等资源使用情况。从 Kubernetes 1.12 开始，kubernetes 的安装脚本移除了 Heapster，从 1.13 开始完全移除了对 Heapster 的支持，Heapster 不再被维护。替代方案如下：
+
+1. 用于支持自动扩缩容的 CPU/memory HPA metrics：metrics-server；
+2. 通用的监控方案：使用第三方可以获取 Prometheus 格式监控指标的监控系统，如 Prometheus Operator；
+3. 事件传输：使用第三方工具来传输、归档 kubernetes events；
+
+> 从 Kubernetes 1.8 开始，资源使用指标（如容器 CPU 和内存使用率）通过 Metrics API 在 Kubernetes 中获取, metrics-server 替代了heapster。**Metrics Server 实现了Resource Metrics API，Metrics Server 是集群范围资源使用数据的聚合器**。 Metrics Server 从每个节点上的 Kubelet 公开的 Summary API 中采集指标信息。
+
+> 在了解Metrics-Server之前，必须要事先了解下Metrics API的概念。Metrics API相比于之前的监控采集方式(hepaster)是一种新的思路，官方希望核心指标的监控应该是稳定的，版本可控的，且可以直接被用户访问(例如通过使用 kubectl top 命令)，或由集群中的控制器使用(如HPA)，和其他的Kubernetes APIs一样。官方废弃heapster项目，就是为了将核心资源监控作为一等公民对待，即像pod、service那样直接通过api-server或者client直接访问，不再是安装一个hepater来汇聚且由heapster单独管理。
+
+> 假设每个pod和node我们收集10个指标，从k8s的1.6开始，支持5000节点，每个节点30个pod，假设采集粒度为1分钟一次，则"10 x 5000 x 30 / 60 = 25000 平均每分钟2万多个采集指标"。因为k8s的api-server将所有的数据持久化到了etcd中，显然k8s本身不能处理这种频率的采集，而且这种监控数据变化快且都是临时数据，因此需要有一个组件单独处理他们，k8s版本只存放部分在内存中，于是metric-server的概念诞生了。其实hepaster已经有暴露了api，但是用户和Kubernetes的其他组件必须通过master proxy的方式才能访问到，且heapster的接口不像api-server一样，有完整的鉴权以及client集成。
+
+>有了Metrics Server组件，也采集到了该有的数据，也暴露了api，但因为api要统一，如何将请求到api-server的/apis/metrics请求转发给Metrics Server呢，
+解决方案就是：kube-aggregator,在k8s的1.7中已经完成，之前Metrics Server一直没有面世，就是耽误在了kube-aggregator这一步。kube-aggregator（聚合api）主要提供
+
+1. Provide an API for registering API servers;
+2. Summarize discovery information from all the servers;
+3. Proxy client requests to individual servers;
+
+> Metric API的使用
+
+1. Metrics API 只可以查询当前的度量数据，并不保存历史数据
+2. Metrics API URI 为 /apis/metrics.k8s.io/，在 k8s.io/metrics 维护
+3. 必须部署 metrics-server 才能使用该 API，metrics-server 通过调用 Kubelet Summary API 获取数据
+
+> Metrics server定时从Kubelet的Summary API(类似/ap1/v1/nodes/nodename/stats/summary)采集指标信息，这些聚合过的数据将存储在内存中，且以metric-api的形式暴露出去。Metrics server复用了api-server的库来实现自己的功能，比如鉴权、版本等，为了实现将数据存放在内存中吗，去掉了默认的etcd存储，引入了内存存储（即实现Storage interface)。因为存放在内存中，因此监控数据是没有持久化的，可以通过第三方存储来拓展，这个和heapster是一致的。
+
+> Kubernetes Dashboard 还不支持 metrics-server，如果使用 metrics-server 替代 Heapster，将无法在 dashboard 中以图形展示 Pod 的内存和 CPU 情况，需要通过 Prometheus、Grafana 等监控方案来弥补。kuberntes 自带插件的 manifests yaml 文件使用 gcr.io 的 docker registry，国内被墙，需要手动替换为其它 registry 地址（本文档未替换）；可以从微软中国提供的 gcr.io 免费代理下载被墙的镜像；下面部署命令均在k8s-master01节点上执行。
+
+> 监控架构
+
+![](https://upload-images.jianshu.io/upload_images/11223715-acb9173140dfed0d.jpg?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+
+* ④ Metrics-Server 部署
+
+> 下载git上边的文件，因为是1.15所以需要下载指定文件夹
+
+> [https://github.com/kubernetes-incubator/metrics-server/tree/master/deploy/1.8+](https://github.com/kubernetes-incubator/metrics-server/tree/master/deploy/1.8+)
+
+
+
+> 本来可以通过git clone 来下载项目的，项目比较大，在加上网速不行。就6个文件，选择了进入文件内部直接复制文件内容的方式，一定要认真。
+
+``` bash
+mkdir metrics-server
+cd metrics-server
+vi aggregated-metrics-reader.yaml
+vi auth-delegator.yaml
+vi auth-reader.yaml
+vi metrics-apiservice.yaml
+vi metrics-server-deployment.yaml
+vi metrics-server-service.yaml
+vi resource-reader.yaml
+```
+
+
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-afd2202d8f62abd8.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+![](https://upload-images.jianshu.io/upload_images/11223715-2512ce02eae67f1c.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+![](https://upload-images.jianshu.io/upload_images/11223715-f5dcb6c2b3169e62.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-2beb7ddb5bbfb83a.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+![](https://upload-images.jianshu.io/upload_images/11223715-fbd0d2e579a376d9.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-f32d202fca28def3.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+![](https://upload-images.jianshu.io/upload_images/11223715-24737c92f06e3b01.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-50bb09eb4224c6ff.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-20b94f5f6add9788.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+> 修改metrics-server-deployment.yaml 文件
+
+``` bash
+vi metrics-server-deployment.yaml
+```
+
+> 这是已经修改好的
+
+![](https://upload-images.jianshu.io/upload_images/11223715-ac04a9604ead4de2.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+> 修改内容
+
+1. 国内的镜像
+2. 镜像拉取策略
+3. 添加命令和相关参数
+4. 选择目录
+5. 从 kubelet 采集数据的周期 30s
+6. 优先使用 InternalIP 来访问 kubelet，这样可以避免节点名称没有 DNS 解析记录时，通过节点名称调用节点 kubelet API 失败的情况（未配置时默认的情况）
+7. 不验证客户端证书
+
+``` yml
+image: gcr.azk8s.cn/google_containers/metrics-server-amd64:v0.3.3
+imagePullPolicy: IfNotPresent
+command:
+ - /metrics-server
+ - --metric-resolution=30s
+ - --kubelet-preferred-address-types=InternalIP,Hostname,InternalDNS,ExternalDNS,ExternalIP
+ - --kubelet-insecure-tls
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-8176661792909c8c.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+>如果不修改command区域的参数则会报如下错误
+
+``` bash
+E0811 05:02:17.819517       1 manager.go:111] unable to fully collect metrics: [unable to fully scrape metrics from source kubelet_summary:k8s-master: unable to fetch metrics from Kubelet k8s-master (192.168.86.100): Get https://192.168.86.100:10250/stats/summary/: x509: cannot validate certificate for 192.168.86.100 because it doesn't contain any IP SANs, unable to fully scrape metrics from source kubelet_summary:k8s-node1: unable to fetch metrics from Kubelet k8s-node1 (192.168.86.101): Get https://192.168.86.101:10250/stats/summary/: x509: cannot validate certificate for 192.168.86.101 because it doesn't contain any IP SANs]
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-902757313ec455d3.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+> 部署metrics-server
+
+``` bash
+ kubectl apply -f .
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-3f4ff8be1d08d557.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+> 查看运行情况
+
+``` bash
+kubectl -n kube-system get pods -l k8s-app=metrics-server
+
+kubectl get svc -n kube-system  metrics-server
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-86d2625eefe866c6.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+> 测试
+
+``` bash
+kubectl top node
+#出现error: metrics not available yet，等等
+kubectl top nodes
+
+kubectl top pods -n kube-system
+
+kubectl cluster-info
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-540a9f8aab0a954f.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+![](https://upload-images.jianshu.io/upload_images/11223715-2d142b8470b4addf.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+> 火狐访问dashboard，https://192.168.86.101:32500/
+
+![](https://upload-images.jianshu.io/upload_images/11223715-da2a9986246a346e.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+#### （三）自动扩所容演示
+* ① 新建 yaml 生成Deployment
+
+> 一定要加  resources，cpu这部分，否则后面查看hpa的时候，初始化是unknow
+
+``` bash
+---
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: hpa-nginx-deploy
+  labels:
+    app: nginx-demo
+spec:
+  revisionHistoryLimit: 15
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx
+        resources:
+         requests:
+          cpu: 100m
+        ports:
+        - containerPort: 80
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-28a05d32c77a4ea4.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+* ② 创建deployment
+
+``` bash
+kubectl apply -f auto-deployment.yaml
+```
+![](https://upload-images.jianshu.io/upload_images/11223715-519bb007e599ee5f.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+
+* ③ 创建自动扩所容的hpa
+
+> 最大cup 5%，最少1个pod，最多5个pod。根据设定的 cpu使用率（5%）动态的增加或者减少pod数量。
+
+``` bash
+kubectl autoscale deployment hpa-nginx-deploy --cpu-percent=5 --min=1 --max=5  
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-e8233f51a7fab8bc.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+* ④ 查看上面命令行创建的HPA的YAML
+
+``` bash
+kubectl get hpa hpa-nginx-deploy -o yaml
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-66c3b061063b6727.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+* ⑤ 通过请求的方式增加cpu的使用，演示pod数量
+
+> 目前的pod数量
+
+``` bash
+kubectl get pod
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-70e553eed2e13217.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+> 查看pod，IP（10.244.1.27），开始加压
+
+![](https://upload-images.jianshu.io/upload_images/11223715-717f2b958055107e.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+``` bash
+kubectl run -i --tty load-generator --image=busybox /bin/sh
+
+
+while true; do wget -q -O- http://10.244.1.27; done
+```
+
+
+> 新启动一个窗口查看hpa情况，刚开始cpu =1% 后来变成28%，自动进行扩容处理
+
+``` bash
+kubectl describe hpa hpa-nginx-deploy
+```
+
+![](https://upload-images.jianshu.io/upload_images/11223715-f44c7ad714d2623b.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-0fd1893387826ac3.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+``` bash
+kubectl get pod
+kubectl get hpa
+```
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-3e920828a8074c2c.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+![](https://upload-images.jianshu.io/upload_images/11223715-ba9d8e6870dd39e7.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+> 同样的这个时候我们来关掉busybox来减少负载，然后等待一段时间观察下HPA和Deployment对象
+
+``` bash
+kubectl get pod
+
+```
+
+> 上边的图是5个pod，下面变成了1个完成了缩容
+
+![](https://upload-images.jianshu.io/upload_images/11223715-aebbbfb29599c31d.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+
+
+PS：在yaml里面没有添加CpuUtillizationPercentage目标pod所有副本自身的cpu利用率平均值。一个pod自身的cpu利用率，该pod当前cpu的使用量/pod Request值。如果某一时刻，CpuUtillizationPercentage的值超过了80%，则判断当前的pod已经不够支撑业务，需要增加pod。扩所容基本讲述完毕，最复杂的是装Metrics-Server。
